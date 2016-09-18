@@ -43,3 +43,7 @@ To use this plugin from within the sqlite3 command line tool, you must run:
 ```.load path-to-plugin/fts5stemmer``` (for security reasons, SQLite needs you to provide the library path if the plugin is not located inside ```LD_LIBRARY_PATH```. Current directory '.' is a valid path, e.g., ```.load ./fts5stemmer```).
 
 You could also use this from within almost any code that uses sqlite3 as a library (untested). Refer to SQLite website to get more information about ```sqlite3_load_extension``` and ```sqlite3_enable_load_extension``` or look for their equivalents in your language bindings' documentation.
+
+# License
+
+The work here contained is published under the BSD 3-Clause License. Read LICENSE for more information.
