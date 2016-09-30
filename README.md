@@ -1,6 +1,6 @@
 # Snowball tokenizer for SQLite FTS5
 
-This is a simple extension for use with FTS5 within SQLite. It allows FTS5 to use Martin Porter's Snowball stemmers (see http://snowballstem.org/), which are available in several languages.
+This is a simple extension for use with FTS5 within SQLite. It allows FTS5 to use Martin Porter's Snowball stemmers (libstemmer), which are available in several languages. Check http://snowballstem.org/ for more information about them.
 
 # Usage
 
