@@ -223,7 +223,7 @@ static int fts5SnowballCb(
 	} else {
 		char *aBuf;
 		int nBuf, originalNBuf;
-		sb_symbol *stemmed;
+		sb_symbol *stemmed = NULL;
 		int *stemmers;
 
 		aBuf = p->aBuf;
