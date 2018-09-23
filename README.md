@@ -35,10 +35,14 @@ This needs GNU make in order to build. If you're using BSD or similar, you can a
 
 Current version requires SQLite 3.20.0 or newer.
 
-Before building, the Snowball code needs to be put inside a directory called _snowball_ in the base directory. The easiest way to get it is by doing:
-
+Because snowball is a build dependency, please clone this repo with:
 ```
-git clone https://github.com/snowballstem/snowball.git
+git clone --recursive
+```
+
+If you already cloned but forgot the `--recursive`, no problem, just do:
+```
+git submodule update --init --recursive
 ```
 
 After that, just run make (or gmake), and you should obtain the final file called _fts5stemmer.so_

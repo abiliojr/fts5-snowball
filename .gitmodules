@@ -1,0 +1,4 @@
+[submodule "snowball"]
+    path = snowball
+    url = git@github.com:snowballstem/snowball.git
+    branch = master
