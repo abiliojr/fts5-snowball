@@ -33,6 +33,8 @@ Those are the main differences. The data can be queried in the same fashion as a
 
 This needs GNU make in order to build. If you're using BSD or similar, you can always get gmake.
 
+Current version requires SQLite 3.20.0 or newer.
+
 Before building, the Snowball code needs to be put inside a directory called _snowball_ in the base directory. The easiest way to get it is by doing:
 
 ```

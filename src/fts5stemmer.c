@@ -45,15 +45,13 @@ static void destroyStemmer(void *p) {
 	sb_stemmer_delete(p);
 }
 
-static fts5_api *fts5_api_from_db(sqlite3 *db) {
+static fts5_api *fts5_api_from_db(sqlite3 *db){
 	fts5_api *pRet = 0;
 	sqlite3_stmt *pStmt = 0;
 
-	if (SQLITE_OK==sqlite3_prepare(db, "SELECT fts5()", -1, &pStmt, 0) &&
-		SQLITE_ROW==sqlite3_step(pStmt) &&
-		sizeof(pRet)==sqlite3_column_bytes(pStmt, 0))
-	{
-		memcpy(&pRet, sqlite3_column_blob(pStmt, 0), sizeof(pRet));
+	if( SQLITE_OK==sqlite3_prepare(db, "SELECT fts5(?1)", -1, &pStmt, 0) ){
+		sqlite3_bind_pointer(pStmt, 1, (void*)&pRet, "fts5_api_ptr", NULL);
+		sqlite3_step(pStmt);
 	}
 	sqlite3_finalize(pStmt);
 	return pRet;
@@ -232,7 +230,6 @@ static int fts5SnowballCb(
 		nBuf = nToken;
 		memcpy(aBuf, pToken, nBuf);
 		stemmers = p->stemmers;
-
 		originalNBuf = nBuf;
 		while (*stemmers != -1) {
 			stemmed = (sb_symbol *) sb_stemmer_stem(availableStemmers[*stemmers].stemmer, (unsigned char*) aBuf, originalNBuf);
