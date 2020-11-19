@@ -64,6 +64,8 @@ static void destroySnowball(void *p) {
 		sqlite3_free(availableStemmers[i].language);
 	}
 	if (availableStemmers) sqlite3_free(availableStemmers);
+	availableStemmers = NULL;
+	numberAvailableStemmers = 0;
 }
 
 static int isValidLanguage(char *name) {
