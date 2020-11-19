@@ -64,6 +64,12 @@ static void destroySnowball(void *p) {
 		sqlite3_free(availableStemmers[i].language);
 	}
 	if (availableStemmers) sqlite3_free(availableStemmers);
+
+    /// Setting `availableStemmers` explicitly to NULL fixes crashes cased by `sqlite3_realloc` called on  `availableStemmers` later on
+    availableStemmers = NULL;
+
+    /// Stemmers were removed so this should be set to 0
+    numberAvailableStemmers = 0;
 }
 
 static int isValidLanguage(char *name) {
