@@ -45,15 +45,26 @@ static void destroyStemmer(void *p) {
 	sb_stemmer_delete(p);
 }
 
-static fts5_api *fts5_api_from_db(sqlite3 *db){
-	fts5_api *pRet = 0;
+static fts5_api *fts5_api_from_db(sqlite3 *db) {
+	fts5_api *pRet=0;
 	sqlite3_stmt *pStmt = 0;
 
-	if( SQLITE_OK==sqlite3_prepare(db, "SELECT fts5(?1)", -1, &pStmt, 0) ){
-		sqlite3_bind_pointer(pStmt, 1, (void*)&pRet, "fts5_api_ptr", NULL);
-		sqlite3_step(pStmt);
+	int version=sqlite3_libversion_number();
+	if (version >=3020000) { // current api
+		if( SQLITE_OK==sqlite3_prepare(db, "SELECT fts5(?1)", -1, &pStmt, 0) ) {
+			sqlite3_bind_pointer(pStmt, 1, (void*)&pRet, "fts5_api_ptr", NULL);
+			sqlite3_step(pStmt);
+		}
+		sqlite3_finalize(pStmt);
+	} else { // before 3.20
+		int rc = sqlite3_prepare(db, "SELECT fts5()", -1, &pStmt, 0);
+		if( rc==SQLITE_OK ) {
+			if(SQLITE_ROW==sqlite3_step(pStmt) && sizeof(fts5_api*)==sqlite3_column_bytes(pStmt, 0)) {
+				memcpy(&pRet, sqlite3_column_blob(pStmt, 0), sizeof(fts5_api*));
+			}
+			sqlite3_finalize(pStmt);
+		}
 	}
-	sqlite3_finalize(pStmt);
 	return pRet;
 }
 

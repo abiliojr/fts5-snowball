@@ -33,7 +33,7 @@ Those are the main differences. The data can be queried in the same fashion as a
 
 This needs GNU make in order to build. If you're using BSD or similar, you can always get gmake.
 
-Current version requires SQLite 3.20.0 or newer.
+Current version requires SQLite 3.9.0 or newer.
 
 Because snowball is a build dependency, please clone this repo with:
 ```
