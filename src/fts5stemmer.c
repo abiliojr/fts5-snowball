@@ -285,7 +285,13 @@ int sqlite3_extension_init(sqlite3 *db, char **error, const sqlite3_api_routines
 	languagesList = sb_stemmer_list();
 
 	ftsApi = fts5_api_from_db(db);
-	ftsApi->xCreateTokenizer(ftsApi, "snowball", (void *) ftsApi, &tokenizer, destroySnowball);
-
-	return SQLITE_OK;
+	
+	if (ftsApi) {
+		ftsApi->xCreateTokenizer(ftsApi, "snowball", (void *) ftsApi, &tokenizer, destroySnowball);
+		return SQLITE_OK;
+	} else {
+		*error = sqlite3_mprintf("Can't find fts5 extension");
+		return SQLITE_ERROR;
+	}
 }
+
