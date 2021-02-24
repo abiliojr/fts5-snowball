@@ -213,7 +213,8 @@ static int ftsSnowballCreate(
 
 	if (rc != SQLITE_OK) {
 		ftsSnowballDelete((Fts5Tokenizer*) result);
-		if (stemmers != NULL) sqlite3_free(stemmers);
+		// ftsSnowballDelete() normally releases "stemmers", because result->stemmers = stemmers
+		if (!result && stemmers != NULL) sqlite3_free(stemmers);
 		result = 0;
 	}
 
