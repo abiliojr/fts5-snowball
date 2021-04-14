@@ -45,15 +45,26 @@ static void destroyStemmer(void *p) {
 	sb_stemmer_delete(p);
 }
 
-static fts5_api *fts5_api_from_db(sqlite3 *db){
-	fts5_api *pRet = 0;
+static fts5_api *fts5_api_from_db(sqlite3 *db) {
+	fts5_api *pRet=0;
 	sqlite3_stmt *pStmt = 0;
 
-	if( SQLITE_OK==sqlite3_prepare(db, "SELECT fts5(?1)", -1, &pStmt, 0) ){
-		sqlite3_bind_pointer(pStmt, 1, (void*)&pRet, "fts5_api_ptr", NULL);
-		sqlite3_step(pStmt);
+	int version=sqlite3_libversion_number();
+	if (version >=3020000) { // current api
+		if( SQLITE_OK==sqlite3_prepare(db, "SELECT fts5(?1)", -1, &pStmt, 0) ) {
+			sqlite3_bind_pointer(pStmt, 1, (void*)&pRet, "fts5_api_ptr", NULL);
+			sqlite3_step(pStmt);
+		}
+		sqlite3_finalize(pStmt);
+	} else { // before 3.20
+		int rc = sqlite3_prepare(db, "SELECT fts5()", -1, &pStmt, 0);
+		if( rc==SQLITE_OK ) {
+			if(SQLITE_ROW==sqlite3_step(pStmt) && sizeof(fts5_api*)==sqlite3_column_bytes(pStmt, 0)) {
+				memcpy(&pRet, sqlite3_column_blob(pStmt, 0), sizeof(fts5_api*));
+			}
+			sqlite3_finalize(pStmt);
+		}
 	}
-	sqlite3_finalize(pStmt);
 	return pRet;
 }
 
@@ -202,7 +213,8 @@ static int ftsSnowballCreate(
 
 	if (rc != SQLITE_OK) {
 		ftsSnowballDelete((Fts5Tokenizer*) result);
-		if (stemmers != NULL) sqlite3_free(stemmers);
+		// ftsSnowballDelete() normally releases "stemmers", because result->stemmers = stemmers
+		if (!result && stemmers != NULL) sqlite3_free(stemmers);
 		result = 0;
 	}
 
@@ -274,7 +286,13 @@ int sqlite3_extension_init(sqlite3 *db, char **error, const sqlite3_api_routines
 	languagesList = sb_stemmer_list();
 
 	ftsApi = fts5_api_from_db(db);
-	ftsApi->xCreateTokenizer(ftsApi, "snowball", (void *) ftsApi, &tokenizer, destroySnowball);
-
-	return SQLITE_OK;
+	
+	if (ftsApi) {
+		ftsApi->xCreateTokenizer(ftsApi, "snowball", (void *) ftsApi, &tokenizer, destroySnowball);
+		return SQLITE_OK;
+	} else {
+		*error = sqlite3_mprintf("Can't find fts5 extension");
+		return SQLITE_ERROR;
+	}
 }
+
