@@ -1,6 +1,7 @@
 #include <sqlite3ext.h>
 #include <libstemmer.h>
 #include <string.h>
+#include <assert.h>
 
 #define MIN_TOKEN_LEN (3)
 #define MAX_TOKEN_LEN (64)
@@ -16,18 +17,27 @@ struct StemmerListItem {
 	char *language;
 };
 
-struct StemmerListItem *availableStemmers;
-int numberAvailableStemmers = 0;
+// global stemmers cache on ~db connection level.
+// other variants like a simple global cache, global thread local cache, etc
+// failed in a multithreaded environment with ability of garbage collector
+// to close connection in a different thread (not where conn have been created)
+struct GlobalSnowballContext {
+	fts5_api* fts5;
+	struct StemmerListItem *stemmers;
+	int numberStemmers;
+};
 
 struct SnowTokenizer {
-	fts5_tokenizer tokenizer;       /* Parent tokenizer module */
-	Fts5Tokenizer *pTokenizer;      /* Parent tokenizer instance */
+	fts5_tokenizer tokenizer;           /* Parent tokenizer module */
+	Fts5Tokenizer *pTokenizer;          /* Parent tokenizer instance */
 	int *stemmers;
 	char aBuf[MAX_TOKEN_LEN];
+	struct GlobalSnowballContext* gCtx; /* stemmers cache */
 };
 
 struct SnowContext {
-	void *pCtx;
+	void *pCtx;                         /* internal context of fts5 */
+	struct GlobalSnowballContext* gCtx; /* stemmers cache */
 	int (*xToken)(void*, int, const char*, int, int, int);
 	int *stemmers;
 	char *aBuf;
@@ -67,14 +77,19 @@ static fts5_api *fts5_api_from_db(sqlite3 *db) {
 }
 
 static void destroySnowball(void *p) {
+	struct GlobalSnowballContext* ctx = (struct GlobalSnowballContext*)p;
+	struct StemmerListItem* availableStemmers = ctx->stemmers;
+
+	assert(ctx->numberStemmers == 0 || availableStemmers != NULL);
+
 	int i;
-	for (i = 0; i < numberAvailableStemmers; i++) {
+	for (i = 0; i < ctx->numberStemmers; i++) {
 		destroyStemmer(availableStemmers[i].stemmer);
 		sqlite3_free(availableStemmers[i].language);
 	}
-	if (availableStemmers) sqlite3_free(availableStemmers);
-	availableStemmers = NULL;
-	numberAvailableStemmers = 0;
+
+	if (ctx->stemmers) sqlite3_free(ctx->stemmers);
+	sqlite3_free(ctx);  // destroy global stemmers cache
 }
 
 static int isValidLanguage(char *name) {
@@ -88,10 +103,14 @@ static int isValidLanguage(char *name) {
 	return 0;
 }
 
-static int findStemmerOrLoad(char *language, int *result) {
+static int findStemmerOrLoad(char *language, int *result, struct GlobalSnowballContext* cxt) {
 	int i;
 	struct sb_stemmer *newStemmer;
 	char *stemmerLanguage;
+	struct StemmerListItem* availableStemmers = cxt->stemmers;
+	int numberAvailableStemmers = cxt->numberStemmers;
+
+	assert(numberAvailableStemmers == 0 || availableStemmers != NULL);
 
 	if (!isValidLanguage(language)) {
 		*result = -1;
@@ -123,31 +142,34 @@ static int findStemmerOrLoad(char *language, int *result) {
 
 	availableStemmers[numberAvailableStemmers].stemmer = newStemmer;
 	availableStemmers[numberAvailableStemmers].language = stemmerLanguage;
-	
+
 
 	*result = numberAvailableStemmers;
 	numberAvailableStemmers += 1;
+
+	cxt->stemmers = availableStemmers;
+	cxt->numberStemmers = numberAvailableStemmers;
 	return SQLITE_OK;
 }
 
-static int processListLanguages(const char **azArg, int nArg, int **stemmers_ret, int *nextArg) {
+static int processListLanguages(const char **azArg, int nArg, int **stemmers_ret, int *nextArg, struct GlobalSnowballContext* cxt) {
 	int i, j;
 	int *stemmer_indexes = NULL;
 
 	for (i = 0; i < nArg; i++) {
-		if (findStemmerOrLoad((char *) azArg[i], &j) == SQLITE_ERROR) return SQLITE_ERROR;
+		if (findStemmerOrLoad((char *) azArg[i], &j, cxt) == SQLITE_ERROR) return SQLITE_ERROR;
 		if (j == -1) break;
 
 		stemmer_indexes = realloc_or_free(stemmer_indexes, (i + 1) * sizeof(int));
 		if (stemmer_indexes == NULL) return SQLITE_ERROR;
-		
+
 		stemmer_indexes[i] = j;
 	}
 
 	*nextArg = i;
 
 	if (i == 0) {
-		if (findStemmerOrLoad(DEFAULT_LANGUAGE, &j) == SQLITE_ERROR) return SQLITE_ERROR;
+		if (findStemmerOrLoad(DEFAULT_LANGUAGE, &j, cxt) == SQLITE_ERROR) return SQLITE_ERROR;
 		stemmer_indexes = realloc_or_free(stemmer_indexes, sizeof(int));
 		if (stemmer_indexes == NULL) return SQLITE_ERROR;
 		stemmer_indexes[0] = j;
@@ -179,7 +201,8 @@ static int ftsSnowballCreate(
 	Fts5Tokenizer **ppOut
 ){
 	struct SnowTokenizer *result;
-	fts5_api *pApi = (fts5_api*)pCtx;
+	struct GlobalSnowballContext* cxt = (struct GlobalSnowballContext*)pCtx;
+	fts5_api *pApi = cxt->fts5;
 	void *pUserdata = 0;
 	int rc = SQLITE_OK;
 	int nextArg;
@@ -190,7 +213,8 @@ static int ftsSnowballCreate(
 
 	if (result) {
 		memset(result, 0, sizeof(struct SnowTokenizer));
-		rc = processListLanguages(azArg, nArg, &stemmers, &nextArg);
+		result->gCtx = cxt;
+		rc = processListLanguages(azArg, nArg, &stemmers, &nextArg, cxt);
 		result->stemmers = stemmers;
 	} else {
 		rc = SQLITE_ERROR;
@@ -243,6 +267,8 @@ static int fts5SnowballCb(
 		memcpy(aBuf, pToken, nBuf);
 		stemmers = p->stemmers;
 		originalNBuf = nBuf;
+		struct StemmerListItem* availableStemmers = p->gCtx->stemmers;
+		assert(availableStemmers != NULL);
 		while (*stemmers != -1) {
 			stemmed = (sb_symbol *) sb_stemmer_stem(availableStemmers[*stemmers].stemmer, (unsigned char*) aBuf, originalNBuf);
 			nBuf = sb_stemmer_length(availableStemmers[*stemmers].stemmer);
@@ -263,7 +289,8 @@ static int ftsSnowballTokenize(
 	struct SnowTokenizer *p = (struct SnowTokenizer*)pTokenizer;
 	struct SnowContext sCtx;
 	sCtx.xToken = xToken;
-	sCtx.pCtx = pCtx;
+	sCtx.pCtx = pCtx; // internal fts5 context
+	sCtx.gCtx = p->gCtx; // our global cache
 	sCtx.stemmers = p->stemmers;
 	sCtx.aBuf = p->aBuf;
 	return p->tokenizer.xTokenize(
@@ -282,9 +309,18 @@ int sqlite3_extension_init(sqlite3 *db, char **error, const sqlite3_api_routines
 	SQLITE_EXTENSION_INIT2(api);
 
 	ftsApi = fts5_api_from_db(db);
-	
+
 	if (ftsApi) {
-		ftsApi->xCreateTokenizer(ftsApi, "snowball", (void *) ftsApi, &tokenizer, destroySnowball);
+		// stemmers cache on ~db connection level
+		struct GlobalSnowballContext *cxt = sqlite3_malloc(sizeof(struct GlobalSnowballContext));
+		if (cxt == NULL) {
+			*error = sqlite3_mprintf("Can't create extension context");
+			return SQLITE_ERROR;
+		}
+		cxt->fts5 = ftsApi;
+		cxt->stemmers = NULL;
+		cxt->numberStemmers = 0;
+		ftsApi->xCreateTokenizer(ftsApi, "snowball", (void *) cxt, &tokenizer, destroySnowball);
 		return SQLITE_OK;
 	} else {
 		*error = sqlite3_mprintf("Can't find fts5 extension");
