@@ -29,6 +29,10 @@ CREATE VIRTUAL TABLE mail USING fts5(sender, title, body, tokenize = "snowball e
 
 Those are the main differences. The data can be queried in the same fashion as any other FTS5 table.
 
+## Thread safety
+
+Use a separate sqlite connection for each thread. Although sqlite3 docs [allow](https://www.sqlite.org/threadsafe.html) use a single connection from many threads, this is not supported by this extension.
+
 # Building
 
 This needs GNU make in order to build. If you're using BSD or similar, you can always get gmake.
