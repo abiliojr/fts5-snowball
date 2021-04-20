@@ -11,8 +11,6 @@ SQLITE_EXTENSION_INIT1;
 #define _USE_MATH_DEFINES
 #endif /* _WIN32 */
 
-static const char **languagesList;
-
 struct StemmerListItem {
 	struct sb_stemmer *stemmer;
 	char *language;
@@ -82,7 +80,7 @@ static void destroySnowball(void *p) {
 static int isValidLanguage(char *name) {
 	const char **languages;
 
-	languages = languagesList;
+	languages = sb_stemmer_list();
 	while (*languages != NULL) {
 		if (strcasecmp(*languages, name) == 0) return 1;
 		languages++;
@@ -282,8 +280,6 @@ int sqlite3_extension_init(sqlite3 *db, char **error, const sqlite3_api_routines
 	fts5_tokenizer tokenizer = {ftsSnowballCreate, ftsSnowballDelete, ftsSnowballTokenize};
 
 	SQLITE_EXTENSION_INIT2(api);
-
-	languagesList = sb_stemmer_list();
 
 	ftsApi = fts5_api_from_db(db);
 	
