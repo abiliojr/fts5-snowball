@@ -31,7 +31,7 @@ Those are the main differences. The data can be queried in the same fashion as a
 
 ## Thread safety
 
-Use a separate sqlite connection for each thread. Although sqlite3 docs [allow](https://www.sqlite.org/threadsafe.html) use a single connection from many threads, this is not supported by this extension.
+We recommend to use a separate sqlite connection for each thread. Although the sqlite3 docs [allow](https://www.sqlite.org/threadsafe.html) use a single connection from many threads in serialized thread mode (it is default), this extension has not been tested in such a scenario (but most likely should work).
 
 # Building
 
