@@ -13,37 +13,16 @@ SQLITE_EXTENSION_INIT1;
 
 static const char **languagesList;
 
-struct StemmerListItem {
-	struct sb_stemmer *stemmer;
-	char *language;
-};
-
-struct StemmerListItem *availableStemmers;
-int numberAvailableStemmers = 0;
-
 struct SnowTokenizer {
-	fts5_tokenizer tokenizer;       /* Parent tokenizer module */
-	Fts5Tokenizer *pTokenizer;      /* Parent tokenizer instance */
-	int *stemmers;
-	char aBuf[MAX_TOKEN_LEN];
-};
-
-struct SnowContext {
 	void *pCtx;
+
+	fts5_tokenizer nextTokenizerModule;
+	Fts5Tokenizer *nextTokenizerInstance;
+
 	int (*xToken)(void*, int, const char*, int, int, int);
-	int *stemmers;
-	char *aBuf;
+
+	struct sb_stemmer **stemmers;
 };
-
-static void *realloc_or_free(void *mem, int size) {
-	void *new_mem = sqlite3_realloc(mem, size);
-	if (new_mem == NULL) sqlite3_free(mem);
-	return new_mem;
-}
-
-static void destroyStemmer(void *p) {
-	sb_stemmer_delete(p);
-}
 
 static fts5_api *fts5_api_from_db(sqlite3 *db) {
 	fts5_api *pRet=0;
@@ -68,18 +47,7 @@ static fts5_api *fts5_api_from_db(sqlite3 *db) {
 	return pRet;
 }
 
-static void destroySnowball(void *p) {
-	int i;
-	for (i = 0; i < numberAvailableStemmers; i++) {
-		destroyStemmer(availableStemmers[i].stemmer);
-		sqlite3_free(availableStemmers[i].language);
-	}
-	if (availableStemmers) sqlite3_free(availableStemmers);
-	availableStemmers = NULL;
-	numberAvailableStemmers = 0;
-}
-
-static int isValidLanguage(char *name) {
+static int isValidLanguage(const char *name) {
 	const char **languages;
 
 	languages = languagesList;
@@ -90,86 +58,51 @@ static int isValidLanguage(char *name) {
 	return 0;
 }
 
-static int findStemmerOrLoad(char *language, int *result) {
+
+static int processListLanguages(const char **azArg, int nArg, int *nextArg, struct SnowTokenizer* snow) {
 	int i;
-	struct sb_stemmer *newStemmer;
-	char *stemmerLanguage;
 
-	if (!isValidLanguage(language)) {
-		*result = -1;
-		return SQLITE_OK;
-	}
-
-	for (i = 0; i < numberAvailableStemmers; i++) {
-		if (sqlite3_stricmp(availableStemmers[i].language, language) == 0) {
-			*result = i;
-			return SQLITE_OK;
-		}
-	}
-
-	/* no stemmer was already instanciated for that language, do so now */
-	newStemmer = sb_stemmer_new(language, NULL);
-
-	if (!newStemmer) {
-		return SQLITE_ERROR;
-	}
-
-	availableStemmers = realloc_or_free(availableStemmers, (numberAvailableStemmers + 1) * sizeof(struct StemmerListItem));
-	stemmerLanguage = sqlite3_malloc(strlen(language) + 1);
-	if (!availableStemmers || !stemmerLanguage) {
-		destroyStemmer(newStemmer);
-		return SQLITE_ERROR;
-	}
-
-	strcpy(stemmerLanguage, language);
-
-	availableStemmers[numberAvailableStemmers].stemmer = newStemmer;
-	availableStemmers[numberAvailableStemmers].language = stemmerLanguage;
-	
-
-	*result = numberAvailableStemmers;
-	numberAvailableStemmers += 1;
-	return SQLITE_OK;
-}
-
-static int processListLanguages(const char **azArg, int nArg, int **stemmers_ret, int *nextArg) {
-	int i, j;
-	int *stemmer_indexes = NULL;
-
+	// find the position of the last language in the list
 	for (i = 0; i < nArg; i++) {
-		if (findStemmerOrLoad((char *) azArg[i], &j) == SQLITE_ERROR) return SQLITE_ERROR;
-		if (j == -1) break;
-
-		stemmer_indexes = realloc_or_free(stemmer_indexes, (i + 1) * sizeof(int));
-		if (stemmer_indexes == NULL) return SQLITE_ERROR;
-		
-		stemmer_indexes[i] = j;
+		if (!isValidLanguage(azArg[i])) break;
 	}
 
 	*nextArg = i;
+	int languages = i;
 
-	if (i == 0) {
-		if (findStemmerOrLoad(DEFAULT_LANGUAGE, &j) == SQLITE_ERROR) return SQLITE_ERROR;
-		stemmer_indexes = realloc_or_free(stemmer_indexes, sizeof(int));
-		if (stemmer_indexes == NULL) return SQLITE_ERROR;
-		stemmer_indexes[0] = j;
-		i++;
+	if (!languages) {
+		azArg = (const char *[]) {DEFAULT_LANGUAGE};
+		languages = 1;
 	}
 
-	stemmer_indexes = realloc_or_free(stemmer_indexes, (i + 1) * sizeof(int));
-	if (stemmer_indexes == NULL) return SQLITE_ERROR;
-	stemmer_indexes[i] = -1;
-	*stemmers_ret = stemmer_indexes;
+	snow->stemmers = (struct sb_stemmer **) sqlite3_malloc((languages + 1) * sizeof(struct sb_stemmer *));
+	if (!snow->stemmers) return SQLITE_NOMEM;
+
+	snow->stemmers[languages] = NULL; // terminate the list
+
+	for (i = 0; i < languages; i++) {
+		snow->stemmers[i] = sb_stemmer_new(azArg[i], NULL);
+		if (!snow->stemmers[i]) return SQLITE_ERROR;
+	}
+
 	return SQLITE_OK;
 }
 
 static void ftsSnowballDelete(Fts5Tokenizer *pTok) {
 	if (pTok) {
 		struct SnowTokenizer *p = (struct SnowTokenizer*)pTok;
-		if (p->pTokenizer) {
-			p->tokenizer.xDelete(p->pTokenizer);
+
+		if (p->stemmers) {
+			for (int i = 0; p->stemmers[i] != NULL ; i++) {
+				sb_stemmer_delete(p->stemmers[i]);
+			}
+
+			sqlite3_free(p->stemmers);
 		}
-		if (p->stemmers) sqlite3_free(p->stemmers);
+
+		if (p->nextTokenizerInstance) {
+			p->nextTokenizerModule.xDelete(p->nextTokenizerInstance);
+		}
 
 		sqlite3_free(p);
 	}
@@ -185,15 +118,13 @@ static int ftsSnowballCreate(
 	void *pUserdata = 0;
 	int rc = SQLITE_OK;
 	int nextArg;
-	int *stemmers = NULL;
 	const char *zBase = "unicode61";
 
 	result = (struct SnowTokenizer*) sqlite3_malloc(sizeof(struct SnowTokenizer));
 
 	if (result) {
 		memset(result, 0, sizeof(struct SnowTokenizer));
-		rc = processListLanguages(azArg, nArg, &stemmers, &nextArg);
-		result->stemmers = stemmers;
+		rc = processListLanguages(azArg, nArg, &nextArg, result);
 	} else {
 		rc = SQLITE_ERROR;
 	}
@@ -202,20 +133,18 @@ static int ftsSnowballCreate(
 		if (nArg > nextArg) {
 			zBase = azArg[nextArg];
 		}
-		rc = pApi->xFindTokenizer(pApi, zBase, &pUserdata, &result->tokenizer);
+		rc = pApi->xFindTokenizer(pApi, zBase, &pUserdata, &result->nextTokenizerModule);
 	}
 
 	if (rc == SQLITE_OK) {
 		int nArg2 = (nArg > nextArg + 1 ? nArg-nextArg-1 : 0);
 		const char **azArg2 = (nArg2 ? &azArg[nextArg + 1] : 0);
-		rc = result->tokenizer.xCreate(pUserdata, azArg2, nArg2, &result->pTokenizer);
+		rc = result->nextTokenizerModule.xCreate(pUserdata, azArg2, nArg2, &result->nextTokenizerInstance);
 	}
 
 	if (rc != SQLITE_OK) {
 		ftsSnowballDelete((Fts5Tokenizer*) result);
-		// ftsSnowballDelete() normally releases "stemmers", because result->stemmers = stemmers
-		if (!result && stemmers != NULL) sqlite3_free(stemmers);
-		result = 0;
+		result = NULL;
 	}
 
 	*ppOut = (Fts5Tokenizer*) result;
@@ -230,27 +159,26 @@ static int fts5SnowballCb(
 	int iStart,
 	int iEnd
 ){
-	struct SnowContext *p = (struct SnowContext*) pCtx;
+	struct SnowTokenizer *p = (struct SnowTokenizer*) pCtx;
 
 	if (nToken > MAX_TOKEN_LEN || nToken <= MIN_TOKEN_LEN) {
 		return p->xToken(p->pCtx, tflags, pToken, nToken, iStart, iEnd);
 	} else {
-		char *aBuf;
-		int nBuf, originalNBuf;
+		int nBuf = nToken;
 		sb_symbol *stemmed = NULL;
-		int *stemmers;
+		struct sb_stemmer **stemmer;
+		char tokenBuf[MAX_TOKEN_LEN];
 
-		aBuf = p->aBuf;
-		nBuf = nToken;
-		memcpy(aBuf, pToken, nBuf);
-		stemmers = p->stemmers;
-		originalNBuf = nBuf;
-		while (*stemmers != -1) {
-			stemmed = (sb_symbol *) sb_stemmer_stem(availableStemmers[*stemmers].stemmer, (unsigned char*) aBuf, originalNBuf);
-			nBuf = sb_stemmer_length(availableStemmers[*stemmers].stemmer);
-			if (nBuf != originalNBuf) break;
-			stemmers++;
+		memcpy(tokenBuf, pToken, nToken);
+		stemmer = p->stemmers;
+
+		while (*stemmer) {
+			stemmed = (sb_symbol *) sb_stemmer_stem(*stemmer, (unsigned char*) tokenBuf, nBuf);
+			nBuf = sb_stemmer_length(*stemmer);
+			if (nBuf != nToken) break;
+			stemmer++;
 		}
+
 		return p->xToken(p->pCtx, tflags, (char *) stemmed, nBuf, iStart, iEnd);
 	}
 }
@@ -263,13 +191,11 @@ static int ftsSnowballTokenize(
 	int (*xToken)(void*, int, const char*, int nToken, int iStart, int iEnd)
 ){
 	struct SnowTokenizer *p = (struct SnowTokenizer*)pTokenizer;
-	struct SnowContext sCtx;
-	sCtx.xToken = xToken;
-	sCtx.pCtx = pCtx;
-	sCtx.stemmers = p->stemmers;
-	sCtx.aBuf = p->aBuf;
-	return p->tokenizer.xTokenize(
-		p->pTokenizer, (void*)&sCtx, flags, pText, nText, fts5SnowballCb
+	p->xToken = xToken;
+	p->pCtx = pCtx;
+
+	return p->nextTokenizerModule.xTokenize(
+		p->nextTokenizerInstance, (void*) p, flags, pText, nText, fts5SnowballCb
 	);
 }
 
@@ -288,7 +214,7 @@ int sqlite3_extension_init(sqlite3 *db, char **error, const sqlite3_api_routines
 	ftsApi = fts5_api_from_db(db);
 	
 	if (ftsApi) {
-		ftsApi->xCreateTokenizer(ftsApi, "snowball", (void *) ftsApi, &tokenizer, destroySnowball);
+		ftsApi->xCreateTokenizer(ftsApi, "snowball", (void *) ftsApi, &tokenizer, NULL);
 		return SQLITE_OK;
 	} else {
 		*error = sqlite3_mprintf("Can't find fts5 extension");
