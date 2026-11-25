@@ -1,0 +1,48 @@
+name: Build Windows DLL
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+  workflow_dispatch: # Позволяет запускать сборку вручную
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        submodules: 'recursive' # Критически важно для загрузки Snowball
+
+    - name: Setup MSYS2
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: MINGW64
+        update: true
+        install: >-
+          mingw-w64-x86_64-toolchain
+          mingw-w64-x86_64-make
+          git
+
+    - name: Build with Make
+      shell: msys2 {0}
+      run: |
+        # Переходим в директорию проекта
+        cd "$GITHUB_WORKSPACE"
+        # Собираем проект. В MSYS2 команда make доступна как mingw32-make
+        mingw32-make
+
+    - name: Rename artifact for Windows
+      shell: msys2 {0}
+      run: |
+        # Переименовываем выходной файл .so в .dll для удобства
+        mv fts5stemmer.so fts5stemmer.dll
+
+    - name: Upload DLL Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: fts5stemmer-windows-dll
+        path: fts5stemmer.dll
