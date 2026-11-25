@@ -13,25 +13,26 @@ jobs:
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v6 # Обновлено с v4 для Node.js 24
+      uses: actions/checkout@v6
       with:
         submodules: 'recursive'
 
     - name: Setup MSYS2 (UCRT64)
       uses: msys2/setup-msys2@v2
       with:
-        msystem: UCRT64 # Мигрировано с MINGW64
+        msystem: UCRT64
         update: true
         install: >-
           mingw-w64-ucrt-x86_64-toolchain
           mingw-w64-ucrt-x86_64-make
+          make
           git
 
     - name: Build with Make
       shell: msys2 {0}
       run: |
         cd "$GITHUB_WORKSPACE"
-        make # В UCRT64 используется обычная команда make
+        make
 
     - name: Rename artifact for Windows
       shell: msys2 {0}
@@ -39,7 +40,7 @@ jobs:
         mv fts5stemmer.so fts5stemmer.dll
 
     - name: Upload DLL Artifact
-      uses: actions/upload-artifact@v6 # Обновлено с v4 для Node.js 24
+      uses: actions/upload-artifact@v6
       with:
         name: fts5stemmer-windows-dll
         path: fts5stemmer.dll
