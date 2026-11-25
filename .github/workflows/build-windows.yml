@@ -5,7 +5,7 @@ on:
     branches: [ master, main ]
   pull_request:
     branches: [ master, main ]
-  workflow_dispatch: # Позволяет запускать сборку вручную
+  workflow_dispatch:
 
 jobs:
   build:
@@ -13,36 +13,33 @@ jobs:
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6 # Обновлено с v4 для Node.js 24
       with:
-        submodules: 'recursive' # Критически важно для загрузки Snowball
+        submodules: 'recursive'
 
-    - name: Setup MSYS2
+    - name: Setup MSYS2 (UCRT64)
       uses: msys2/setup-msys2@v2
       with:
-        msystem: MINGW64
+        msystem: UCRT64 # Мигрировано с MINGW64
         update: true
         install: >-
-          mingw-w64-x86_64-toolchain
-          mingw-w64-x86_64-make
+          mingw-w64-ucrt-x86_64-toolchain
+          mingw-w64-ucrt-x86_64-make
           git
 
     - name: Build with Make
       shell: msys2 {0}
       run: |
-        # Переходим в директорию проекта
         cd "$GITHUB_WORKSPACE"
-        # Собираем проект. В MSYS2 команда make доступна как mingw32-make
-        mingw32-make
+        make # В UCRT64 используется обычная команда make
 
     - name: Rename artifact for Windows
       shell: msys2 {0}
       run: |
-        # Переименовываем выходной файл .so в .dll для удобства
         mv fts5stemmer.so fts5stemmer.dll
 
     - name: Upload DLL Artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6 # Обновлено с v4 для Node.js 24
       with:
         name: fts5stemmer-windows-dll
         path: fts5stemmer.dll
