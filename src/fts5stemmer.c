@@ -2,6 +2,19 @@
 #include <sqlite3ext.h>
 #include <string.h>
 
+// Максимальное количество переопределений
+#define MAX_OVERRIDES 256
+
+// Структура для одной пары переопределения
+struct StemOverride {
+    char *token;   // Исходный токен (в нижнем регистре)
+    char *stem;    // Заданная основа
+};
+
+// Глобальный или локальный (в составе SnowTokenizer) массив переопределений
+// Лучше хранить в SnowTokenizer, чтобы разные таблицы могли иметь разные словари
+
+
 #define MIN_TOKEN_LEN (3)
 #define MAX_TOKEN_LEN (64)
 #define DEFAULT_LANGUAGE "english"
@@ -22,6 +35,10 @@ struct SnowTokenizer {
     int (*xToken)(void *, int, const char *, int, int, int);
 
     struct sb_stemmer **stemmers;
+
+    struct StemOverride *overrides;
+    int nOverrides;
+    int overridesCapacity;
 };
 
 static fts5_api *fts5_api_from_db(sqlite3 *db) {
@@ -87,6 +104,63 @@ static int processListLanguages(const char **azArg, int nArg, int *nextArg, stru
     return SQLITE_OK;
 }
 
+// Добавление одного переопределения
+static int addOverride(struct SnowTokenizer *snow, const char *token, const char *stem) {
+    if (snow->nOverrides >= snow->overridesCapacity) {
+        int newCap = snow->overridesCapacity ? snow->overridesCapacity * 2 : 16;
+        struct StemOverride *newArr = sqlite3_realloc(snow->overrides, newCap * sizeof(struct StemOverride));
+        if (!newArr) return SQLITE_NOMEM;
+        snow->overrides = newArr;
+        snow->overridesCapacity = newCap;
+    }
+    snow->overrides[snow->nOverrides].token = sqlite3_mprintf("%s", token);
+    snow->overrides[snow->nOverrides].stem = sqlite3_mprintf("%s", stem);
+    if (!snow->overrides[snow->nOverrides].token || !snow->overrides[snow->nOverrides].stem) {
+        sqlite3_free(snow->overrides[snow->nOverrides].token);
+        sqlite3_free(snow->overrides[snow->nOverrides].stem);
+        return SQLITE_NOMEM;
+    }
+    snow->nOverrides++;
+    return SQLITE_OK;
+}
+
+// Поиск переопределения по токену (линейный поиск для простоты)
+static const char* findOverride(struct SnowTokenizer *snow, const char *token, int nToken) {
+    for (int i = 0; i < snow->nOverrides; i++) {
+        if (strlen(snow->overrides[i].token) == nToken &&
+            memcmp(snow->overrides[i].token, token, nToken) == 0) {
+            return snow->overrides[i].stem;
+        }
+    }
+    return NULL;
+}
+
+// Загрузка переопределений из файла (формат: токен основа, по одному на строку)
+static int loadOverridesFromFile(struct SnowTokenizer *snow, const char *path) {
+    FILE *f = fopen(path, "r");
+    if (!f) return SQLITE_ERROR;
+    char line[256];
+    while (fgets(line, sizeof(line), f)) {
+        // Убираем перевод строки и комментарии
+        char *p = strchr(line, '\n');
+        if (p) *p = '\0';
+        p = strchr(line, '#');
+        if (p) *p = '\0';
+        if (line[0] == '\0') continue;
+
+        char *token = strtok(line, " \t");
+        char *stem = strtok(NULL, " \t");
+        if (token && stem) {
+            // Приводим токен к нижнему регистру (упрощённо)
+            for (char *c = token; *c; c++) *c = tolower(*c);
+            int rc = addOverride(snow, token, stem);
+            if (rc != SQLITE_OK) { fclose(f); return rc; }
+        }
+    }
+    fclose(f);
+    return SQLITE_OK;
+}
+
 static void ftsSnowballDelete(Fts5Tokenizer *pTok) {
     if (pTok) {
         struct SnowTokenizer *p = (struct SnowTokenizer *)pTok;
@@ -124,6 +198,25 @@ static int ftsSnowballCreate(void *pCtx, const char **azArg, int nArg, Fts5Token
         rc = SQLITE_ERROR;
     }
 
+    // Проверяем, есть ли аргумент "override"
+    const char *overridePath = NULL;
+    for (int i = nextArg; i < nArg; i++) {
+        if (strncmp(azArg[i], "override=", 9) == 0) {
+            overridePath = azArg[i] + 9;
+            // Можно удалить этот аргумент из списка или просто игнорировать при передаче дальше
+            break;
+        }
+    }
+    if (overridePath) {
+        int rc = loadOverridesFromFile(result, overridePath);
+        if (rc != SQLITE_OK) {
+            // Если файл не загрузился, можно продолжить без переопределений или вернуть ошибку
+            // Лучше вернуть ошибку, чтобы пользователь знал
+            ftsSnowballDelete((Fts5Tokenizer *)result);
+            return rc;
+        }
+    }
+    
     if (rc == SQLITE_OK) {
         if (nArg > nextArg) {
             zBase = azArg[nextArg];
